@@ -1,0 +1,209 @@
+---
+title: "ESM 244 Lab 2"
+author: "Sadie Cwikiel"
+date: "2023-01-19"
+output: html_document
+---
+
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+#install.packages("palmerpenguins")
+#install.packages("AICcmodavg")
+#install.packages("equatiomatic")
+
+
+library(tidyverse)
+library(palmerpenguins)
+library(AICcmodavg)
+library(equatiomatic)
+
+
+```
+
+
+# Predicting penguin mass
+```{r}
+penguins_clean <- penguins %>% 
+  drop_na() %>% 
+  rename(mass = body_mass_g,
+         bill_l = bill_length_mm,
+         bill_d = bill_depth_mm,
+         flip_l = flipper_length_mm)
+
+mdl1 <- lm(mass ~ bill_l + bill_d + flip_l + species + sex + island,
+           data = penguins_clean)
+  
+
+summary(mdl1)
+
+
+AIC(mdl1)
+```
+
+# formulas as specific types of objects
+```{r}
+#formula 1 used for model 1, copy and paste the equation from the model 1 above. r will recognize it as a formula. can plug this in for all of the stuff here to clean it up a little bit.
+f1 <- mass ~ bill_l + bill_d + flip_l + species + sex + island
+
+#changing to m1 instead of mdl1
+m1 <- lm(f1, data = penguins_clean)
+
+#model 2
+f2 <- mass ~ bill_l + bill_d + flip_l + species + sex
+
+m2 <- lm(f2, data = penguins_clean)
+
+#model 3
+f3 <- mass ~ bill_d + flip_l + species + sex
+
+m3 <- lm(f3, data = penguins_clean)
+
+
+AIC(m1, m2, m3)
+BIC(m1, m2, m3)
+
+#corrected AIC
+AICcmodavg::AICc(m1)
+
+#HELPFUL FUNCTION 
+#nice table with delta AIC automatically in it, ranks it in order of lowest AIC
+aictab(list(m1, m2, m3))
+
+#same for BIC
+bictab(list(m1, m2, m3))
+
+```
+
+# compare models using k-fold cross validation
+```{r}
+#10 fold cross validation; take a chunk out 10 different times and generate the models without those chunks each time
+folds <- 10
+
+#rep function to repeat(1:number of folds)
+fold_vec <- rep(1:folds, length.out = nrow(penguins_clean))
+
+#when working with random numbers, computers use pseudo random numbers, so if you start from the same point you get the same random numbers in the same order. so set.seed sets the starting point in your for the random number list so you can have the same data as someone else who sets the seed at the same number. allows for exact replication of the data analysis.
+set.seed(42)
+
+#uniform random number from that generated number list
+#runif(1)
+
+penguins_fold <-  penguins_clean %>% 
+  mutate(group = sample(fold_vec, size = n(), replace = FALSE))
+
+#every group should be the same/similar in size
+table(penguins_fold$group)
+
+#create a test data frame, take out the first group and set it aside
+test_df <- penguins_fold %>% 
+  filter(group == 1)
+
+#make a training dataset of all of the other groups
+train_df <- penguins_fold %>% 
+  filter(group !=1)
+```
+
+```{r}
+#root mean square error (RMSE) to see how closely the  model works for each point
+calc_rmse <- function(x, y) {
+  rmse <- (x - y)^2 %>%
+    mean() %>% 
+    sqrt()
+  return(rmse)
+}
+```
+
+
+```{r}
+#based on the smaller set, here's how we'd predict the mass based on these other variables
+training_m1 <- lm(f1, data = train_df)
+
+training_m2 <- lm(f2, data = train_df)
+
+training_m3 <- lm(f3, data = train_df)
+
+#add the body mass predictions by each model to the data frame
+predict_test <- test_df %>% 
+  mutate(model1 = predict(training_m1, test_df),
+         model2 = predict(training_m2, test_df),
+         model3 = predict(training_m3, test_df))
+
+#error will be the difference between the predicted mass and the actual mass, so we can now calculate our RMSE. big differences will be penalized more. take the average of  all the differences throughout the entire column, then the square root of that. metric of how bad the difference is between the predicted values and known values are for each of the models. 
+rmse_predict_test <- predict_test %>% 
+  summarize(rmse_m1 = calc_rmse(model1, mass),
+            rmse_m2 = calc_rmse(model2, mass),
+            rmse_m3 = calc_rmse(model3, mass))
+
+#output is a data frame with the rmse of m1, m2, and m3. which model generated the lowest rmse (the closest predictions to the known values)? model 2 -- this was also the preferred on in AIC.
+rmse_predict_test
+
+#for AIC/BIC, we're penalizing over fitting the data. for rmse, we're just comparing our model to data that it hasn't already seen, so we're skirting that whole problem to see how well a model predicts unseen data. a little more intuitive and gets at the whole point of why we're making these models.
+```
+# let's iterate
+```{r}
+#create an empty data frame
+rmse_df <- data.frame() 
+
+#for loops! so we don't have to go through each of the iterations manually
+#for each one of these values for our folds, for the first index here, we're going to assign it to a variable called i. do a thing with it. for the next variable in the vector, we'll then assign that to i, do the thing with it. etc. etc.
+#we have 10 folds so it'll go through this for loop 10 times
+for(i in 1:folds) {
+  
+  ### can test it with i <- 1
+  kfold_test_df <- penguins_fold %>% 
+    filter(group == i)
+  
+  kfold_train_df <- penguins_fold %>% 
+    filter(group !=i)
+  
+  #create model for each of the training datasets
+  kfold_m1 <- lm(f1, data = kfold_train_df) 
+  kfold_m2 <- lm(f2, data = kfold_train_df) 
+  kfold_m3 <- lm(f3, data = kfold_train_df) 
+  
+  #predictive data frame
+  kfold_pred_df <- kfold_test_df %>% #use kfold_test_df as the first argument (dataframe of mutate()  
+    mutate(m1 = predict(kfold_m1, .),
+           m2 = predict(kfold_m2, .), #short hand of . to insert the data frame you're working with at the beginning of the pipe
+           m3 = predict(kfold_m3, .))
+  
+  #rmse now for each 
+  kfold_rmse_df <-  kfold_pred_df %>% 
+    summarize(rmse_m1 = calc_rmse(m1, mass),
+              rmse_m2 = calc_rmse(m2, mass),
+              rmse_m3 = calc_rmse(m3, mass),
+              test_g = i) #test just to make sure it's going through each of the folds
+  
+  #need to store the results before you go back to the top with i = 2 etc. (it would overwrite it all each time)
+  rmse_df <- bind_rows(rmse_df, kfold_rmse_df)
+
+}
+
+
+#compare the mean rmse's to each other. they're all really close to each other, model 2 is slightly better
+rmse_df %>% 
+  summarize(mean_rmse_m1 = mean(rmse_m1),
+            mean_rmse_m2 = mean(rmse_m2),
+            mean_rmse_m3 = mean(rmse_m3))
+
+```
+### now that we've chosen model 2, now we have to finalize the model using all of the data to parameterize it
+```{r}
+final_mdl <- lm(f2, data = penguins_clean)
+```
+
+
+### equatiomatic to make the equation of the model pretty
+
+Our final model: 
+`r equatiomatic::extract_eq(final_mdl, wrap = TRUE)`
+
+And with coefficients:
+`r equatiomatic::extract_eq(final_mdl, wrap = TRUE, use_coefs = TRUE)`
+
+
+
+
+
+
